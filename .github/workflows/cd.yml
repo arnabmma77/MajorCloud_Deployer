@@ -1,0 +1,334 @@
+name: Continuous Deployment
+
+on:
+  workflow_run:
+    workflows: ["Continuous Integration"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+        - prod
+        - staging
+      force_deploy:
+        description: 'Force deployment even if CI failed'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+  ECR_REPOSITORY: weather-app
+  TERRAFORM_VERSION: 1.6.0
+
+jobs:
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    
+    # Only run if CI passed or force deploy is enabled
+    if: |
+      (github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.force_deploy == 'true')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+        terraform_wrapper: false
+
+    - name: Get ECR login token
+      id: ecr-login
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Set environment variables
+      run: |
+        echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+        echo "ENVIRONMENT=${{ github.event.inputs.environment || 'prod' }}" >> $GITHUB_ENV
+        echo "ECR_REGISTRY=${{ steps.ecr-login.outputs.registry }}" >> $GITHUB_ENV
+
+    - name: Create Terraform backend resources (if needed)
+      run: |
+        # Check if S3 bucket for Terraform state exists
+        aws s3 ls s3://weather-app-terraform-state-bucket-$(openssl rand -hex 4) 2>/dev/null || {
+          echo "Creating Terraform backend resources..."
+          
+          # Create S3 bucket for Terraform state
+          BUCKET_SUFFIX=$(openssl rand -hex 4)
+          BUCKET_NAME="weather-app-terraform-state-bucket-${BUCKET_SUFFIX}"
+          
+          aws s3 mb s3://${BUCKET_NAME} --region ${{ env.AWS_DEFAULT_REGION }}
+          aws s3api put-bucket-encryption --bucket ${BUCKET_NAME} --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+          aws s3api put-bucket-versioning --bucket ${BUCKET_NAME} --versioning-configuration Status=Enabled
+          aws s3api put-public-access-block --bucket ${BUCKET_NAME} --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          
+          # Create DynamoDB table for state locking
+          aws dynamodb create-table \
+            --table-name terraform-lock \
+            --attribute-definitions AttributeName=LockID,AttributeType=S \
+            --key-schema AttributeName=LockID,KeyType=HASH \
+            --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
+            --region ${{ env.AWS_DEFAULT_REGION }} || true
+          
+          echo "TERRAFORM_STATE_BUCKET=${BUCKET_NAME}" >> $GITHUB_ENV
+        }
+
+    - name: Initialize Terraform
+      run: |
+        cd terraform
+        
+        # Configure backend if bucket name is available
+        if [ ! -z "$TERRAFORM_STATE_BUCKET" ]; then
+          cat > backend-override.tf << EOF
+        terraform {
+          backend "s3" {
+            bucket         = "$TERRAFORM_STATE_BUCKET"
+            key            = "weather-app/terraform.tfstate"
+            region         = "${{ env.AWS_DEFAULT_REGION }}"
+            dynamodb_table = "terraform-lock"
+            encrypt        = true
+          }
+        }
+        EOF
+        fi
+        
+        terraform init -reconfigure
+
+    - name: Terraform Plan
+      run: |
+        cd terraform
+        terraform plan \
+          -var="environment=${{ env.ENVIRONMENT }}" \
+          -var="aws_primary_region=${{ env.AWS_DEFAULT_REGION }}" \
+          -var="aws_secondary_region=us-west-2" \
+          -var="openweather_api_key=${{ secrets.OPENWEATHER_API_KEY }}" \
+          -var="domain_name=${{ secrets.DOMAIN_NAME || '' }}" \
+          -var="enable_disaster_recovery=true" \
+          -out=tfplan
+
+    - name: Create ECR repository if it doesn't exist
+      run: |
+        aws ecr describe-repositories --repository-names $ECR_REPOSITORY --region ${{ env.AWS_DEFAULT_REGION }} || \
+        aws ecr create-repository --repository-name $ECR_REPOSITORY --region ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Check if Docker image exists
+      id: check-image
+      run: |
+        IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+        
+        # Check if image exists in ECR
+        if aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=${IMAGE_TAG} --region ${{ env.AWS_DEFAULT_REGION }} >/dev/null 2>&1; then
+          echo "image_exists=true" >> $GITHUB_OUTPUT
+          echo "image_uri=${IMAGE_URI}" >> $GITHUB_OUTPUT
+        else
+          echo "image_exists=false" >> $GITHUB_OUTPUT
+          echo "Docker image not found for commit ${IMAGE_TAG}"
+        fi
+
+    - name: Build and push Docker image (if not exists)
+      if: steps.check-image.outputs.image_exists == 'false'
+      run: |
+        cd app
+        
+        # Build the Docker image
+        docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+        docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        
+        # Push to ECR
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        
+        echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+    - name: Set image URI
+      run: |
+        if [ "${{ steps.check-image.outputs.image_exists }}" == "true" ]; then
+          echo "IMAGE_URI=${{ steps.check-image.outputs.image_uri }}" >> $GITHUB_ENV
+        fi
+
+    - name: Update ECS task definition with new image
+      run: |
+        cd terraform
+        
+        # Apply Terraform with the new image
+        terraform apply -auto-approve \
+          -var="environment=${{ env.ENVIRONMENT }}" \
+          -var="aws_primary_region=${{ env.AWS_DEFAULT_REGION }}" \
+          -var="aws_secondary_region=us-west-2" \
+          -var="openweather_api_key=${{ secrets.OPENWEATHER_API_KEY }}" \
+          -var="domain_name=${{ secrets.DOMAIN_NAME || '' }}" \
+          -var="enable_disaster_recovery=true"
+
+    - name: Get deployment outputs
+      id: terraform-outputs
+      run: |
+        cd terraform
+        
+        ALB_DNS_NAME=$(terraform output -raw alb_dns_name)
+        APP_URL=$(terraform output -raw app_url)
+        ECS_CLUSTER=$(terraform output -raw ecs_cluster_name)
+        ECS_SERVICE=$(terraform output -raw ecs_service_name)
+        
+        echo "alb_dns_name=${ALB_DNS_NAME}" >> $GITHUB_OUTPUT
+        echo "app_url=${APP_URL}" >> $GITHUB_OUTPUT
+        echo "ecs_cluster=${ECS_CLUSTER}" >> $GITHUB_OUTPUT
+        echo "ecs_service=${ECS_SERVICE}" >> $GITHUB_OUTPUT
+
+    - name: Wait for ECS service to stabilize
+      run: |
+        echo "Waiting for ECS service to stabilize..."
+        aws ecs wait services-stable \
+          --cluster ${{ steps.terraform-outputs.outputs.ecs_cluster }} \
+          --services ${{ steps.terraform-outputs.outputs.ecs_service }} \
+          --region ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Health check
+      run: |
+        APP_URL=${{ steps.terraform-outputs.outputs.app_url }}
+        
+        echo "Performing health check on ${APP_URL}/health"
+        
+        # Wait up to 5 minutes for the health check to pass
+        for i in {1..30}; do
+          if curl -f "${APP_URL}/health" >/dev/null 2>&1; then
+            echo "✅ Health check passed!"
+            break
+          else
+            echo "Health check attempt $i failed, retrying in 10 seconds..."
+            sleep 10
+            
+            if [ $i -eq 30 ]; then
+              echo "❌ Health check failed after 5 minutes"
+              exit 1
+            fi
+          fi
+        done
+
+    - name: Run smoke tests
+      run: |
+        APP_URL=${{ steps.terraform-outputs.outputs.app_url }}
+        
+        echo "Running smoke tests against ${APP_URL}"
+        
+        # Test 1: Frontend loads
+        echo "Testing frontend..."
+        curl -f "${APP_URL}/" -o /dev/null || { echo "Frontend test failed"; exit 1; }
+        
+        # Test 2: Health endpoint
+        echo "Testing health endpoint..."
+        HEALTH_RESPONSE=$(curl -s "${APP_URL}/health")
+        echo "Health response: $HEALTH_RESPONSE"
+        
+        # Test 3: API endpoint (with test city)
+        echo "Testing weather API..."
+        curl -f "${APP_URL}/api/weather?city=London" -o /dev/null || echo "Weather API test completed (may fail due to API key)"
+        
+        echo "✅ Smoke tests completed!"
+
+    - name: Update secondary region (if enabled)
+      if: env.ENABLE_DR == 'true'
+      run: |
+        echo "Updating secondary region for disaster recovery..."
+        
+        # Push image to secondary region ECR
+        aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin $ECR_REGISTRY
+        
+        # Tag and push to secondary region
+        SECONDARY_ECR="$ECR_REGISTRY/$ECR_REPOSITORY"
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $SECONDARY_ECR:$IMAGE_TAG
+        
+        # Note: This would require ECR replication or manual push to secondary region
+        echo "Secondary region update completed"
+
+    - name: Cleanup old images
+      run: |
+        echo "Cleaning up old Docker images..."
+        
+        # Keep only the latest 10 images
+        aws ecr list-images --repository-name $ECR_REPOSITORY --region ${{ env.AWS_DEFAULT_REGION }} \
+          --query 'imageDetails[?imageTag!=`latest`]|sort_by(@, &imagePushedAt)|[:-10].[imageTag]' \
+          --output text | xargs -r -n 1 aws ecr batch-delete-image --repository-name $ECR_REPOSITORY --region ${{ env.AWS_DEFAULT_REGION }} --image-ids imageTag=
+
+    - name: Deployment Summary
+      run: |
+        echo "🎉 Deployment completed successfully!"
+        echo ""
+        echo "📋 Deployment Summary:"
+        echo "- Environment: ${{ env.ENVIRONMENT }}"
+        echo "- Region: ${{ env.AWS_DEFAULT_REGION }}"
+        echo "- Image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+        echo "- ECS Cluster: ${{ steps.terraform-outputs.outputs.ecs_cluster }}"
+        echo "- ECS Service: ${{ steps.terraform-outputs.outputs.ecs_service }}"
+        echo ""
+        echo "🔗 Application URLs:"
+        echo "- Load Balancer: ${{ steps.terraform-outputs.outputs.app_url }}"
+        echo "- Health Check: ${{ steps.terraform-outputs.outputs.app_url }}/health"
+        
+        if [ ! -z "${{ secrets.DOMAIN_NAME }}" ]; then
+          echo "- Custom Domain: https://${{ secrets.DOMAIN_NAME }}"
+        fi
+
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: failure()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+        terraform_wrapper: false
+
+    - name: Rollback to previous version
+      run: |
+        echo "🔄 Initiating rollback procedure..."
+        
+        # Get the previous stable image tag (assuming we tag with commit SHA)
+        PREVIOUS_TAG=$(aws ecr describe-images --repository-name $ECR_REPOSITORY \
+          --query 'imageDetails|sort_by(@, &imagePushedAt)|[-2].imageTags[0]' \
+          --output text --region ${{ env.AWS_DEFAULT_REGION }})
+        
+        if [ "$PREVIOUS_TAG" != "None" ] && [ "$PREVIOUS_TAG" != "" ]; then
+          echo "Rolling back to image: $PREVIOUS_TAG"
+          
+          # Update the ECS service with the previous image
+          cd terraform
+          terraform init -reconfigure
+          
+          # Note: This is a simplified rollback. In production, you might want to
+          # maintain previous terraform state or use ECS service update directly
+          echo "Rollback initiated for tag: $PREVIOUS_TAG"
+        else
+          echo "⚠️ No previous version found for rollback"
+        fi

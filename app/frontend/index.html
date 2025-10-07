@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather App - Cloud Deployment Demo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1><i class="fas fa-cloud-sun"></i> Weather Dashboard</h1>
+            <p class="subtitle">Multi-Region Cloud Deployment Demo</p>
+        </header>
+
+        <div class="search-section">
+            <div class="search-container">
+                <input type="text" id="cityInput" placeholder="Enter city name..." autocomplete="off">
+                <button id="searchBtn" onclick="searchWeather()">
+                    <i class="fas fa-search"></i> Search
+                </button>
+            </div>
+        </div>
+
+        <div class="loading" id="loading" style="display: none;">
+            <i class="fas fa-spinner fa-spin"></i> Loading weather data...
+        </div>
+
+        <div class="error-message" id="errorMessage" style="display: none;">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span id="errorText"></span>
+        </div>
+
+        <div class="weather-container" id="weatherContainer" style="display: none;">
+            <div class="current-weather">
+                <div class="weather-header">
+                    <h2 id="cityName">City Name</h2>
+                    <span id="country">Country</span>
+                </div>
+                
+                <div class="weather-main">
+                    <div class="temperature-section">
+                        <div class="temperature">
+                            <span id="temperature">--</span>°C
+                        </div>
+                        <div class="weather-icon">
+                            <img id="weatherIcon" src="" alt="Weather Icon">
+                        </div>
+                    </div>
+                    
+                    <div class="weather-description">
+                        <p id="description">Weather Description</p>
+                        <p class="feels-like">Feels like <span id="feelsLike">--</span>°C</p>
+                    </div>
+                </div>
+
+                <div class="weather-details">
+                    <div class="detail-item">
+                        <i class="fas fa-tint"></i>
+                        <span class="label">Humidity</span>
+                        <span id="humidity" class="value">--%</span>
+                    </div>
+                    <div class="detail-item">
+                        <i class="fas fa-gauge-high"></i>
+                        <span class="label">Pressure</span>
+                        <span id="pressure" class="value">-- hPa</span>
+                    </div>
+                    <div class="detail-item">
+                        <i class="fas fa-wind"></i>
+                        <span class="label">Wind</span>
+                        <span id="windSpeed" class="value">-- m/s</span>
+                    </div>
+                    <div class="detail-item">
+                        <i class="fas fa-eye"></i>
+                        <span class="label">Visibility</span>
+                        <span id="visibility" class="value">-- km</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="forecast-section">
+                <h3><i class="fas fa-calendar-days"></i> 5-Day Forecast</h3>
+                <div class="forecast-container" id="forecastContainer">
+                    <!-- Forecast items will be populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+
+        <div class="system-info">
+            <div class="info-item">
+                <i class="fas fa-server"></i>
+                <span>Backend Status: <span id="backendStatus" class="status-indicator">Checking...</span></span>
+            </div>
+            <div class="info-item">
+                <i class="fas fa-cloud"></i>
+                <span>API Source: OpenWeatherMap via Backend Proxy</span>
+            </div>
+        </div>
+
+        <footer class="footer">
+            <p>
+                <i class="fas fa-code"></i> 
+                Automated Multi-Region Cloud Deployment Demo
+                <br>
+                <small>Built with Flask, Docker, Terraform, and GitHub Actions</small>
+            </p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
