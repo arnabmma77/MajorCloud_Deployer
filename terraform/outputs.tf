@@ -191,3 +191,25 @@ output "openweather_api_key_secret_arn" {
   description = "Secrets Manager ARN for OpenWeather API key"
   value       = var.openweather_api_key != "" ? aws_secretsmanager_secret.openweather_api_key[0].arn : null
 }
+
+# SSL Certificate ARNs
+output "acm_certificate_arn" {
+  description = "ACM certificate ARN for primary region"
+  value       = var.domain_name != "" ? aws_acm_certificate.main[0].arn : null
+}
+
+output "acm_certificate_arn_secondary" {
+  description = "ACM certificate ARN for secondary region"
+  value       = var.domain_name != "" && var.enable_disaster_recovery ? aws_acm_certificate.secondary[0].arn : null
+}
+
+# HTTPS Configuration
+output "https_enabled" {
+  description = "Whether HTTPS is enabled"
+  value       = var.domain_name != "" ? true : false
+}
+
+output "app_url_https" {
+  description = "Application HTTPS URL (if custom domain configured)"
+  value       = var.domain_name != "" ? "https://${var.domain_name}" : null
+}
