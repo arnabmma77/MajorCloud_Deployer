@@ -2,6 +2,11 @@ import os
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from dotenv import load_dotenv
+
+load_dotenv()
+
+print("API Key Loaded:", os.getenv("OPENWEATHER_API_KEY"))
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)

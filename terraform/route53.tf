@@ -8,15 +8,15 @@ data "aws_route53_zone" "main" {
 resource "aws_route53_health_check" "primary" {
   count = var.domain_name != "" && var.enable_disaster_recovery ? 1 : 0
 
-  fqdn                            = aws_lb.main.dns_name
-  port                            = 80
-  type                            = "HTTP"
-  resource_path                   = "/health"
-  failure_threshold               = "3"
-  request_interval                = "30"
-  cloudwatch_logs_region          = data.aws_region.current.name
-  cloudwatch_alarm_region         = data.aws_region.current.name
-  insufficient_data_health_status = "Failure"
+  fqdn              = data.aws_lb.main.dns_name
+  port              = 80
+  type              = "HTTP"
+  resource_path     = "/health"
+  failure_threshold = 3
+  request_interval  = 30
+
+  # Valid values: Healthy | Unhealthy | LastKnownStatus
+  insufficient_data_health_status = "LastKnownStatus"
 
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-health-check-primary"
@@ -27,17 +27,15 @@ resource "aws_route53_health_check" "primary" {
 resource "aws_route53_health_check" "secondary" {
   count = var.domain_name != "" && var.enable_disaster_recovery ? 1 : 0
 
-  # Note: This assumes you have a load balancer in the secondary region
-  # You would need to create ECS infrastructure in secondary region too
-  fqdn                            = "secondary-${aws_lb.main.dns_name}"  # Placeholder
-  port                            = 80
-  type                            = "HTTP"
-  resource_path                   = "/health"
-  failure_threshold               = "3"
-  request_interval                = "30"
-  cloudwatch_logs_region          = var.aws_secondary_region
-  cloudwatch_alarm_region         = var.aws_secondary_region
-  insufficient_data_health_status = "Failure"
+  # Note: adjust this fqdn to the real secondary load balancer DNS if available
+  fqdn              = "secondary-${data.aws_lb.main.dns_name}"
+  port              = 80
+  type              = "HTTP"
+  resource_path     = "/health"
+  failure_threshold = 3
+  request_interval  = 30
+
+  insufficient_data_health_status = "LastKnownStatus"
 
   tags = merge(local.common_tags, {
     Name   = "${local.name_prefix}-health-check-secondary"
@@ -45,7 +43,7 @@ resource "aws_route53_health_check" "secondary" {
   })
 }
 
-# Route 53 record for primary region (weighted routing)
+# Route 53 record for primary region (failover PRIMARY)
 resource "aws_route53_record" "primary" {
   count = var.domain_name != "" ? 1 : 0
 
@@ -54,7 +52,7 @@ resource "aws_route53_record" "primary" {
   type    = "A"
 
   set_identifier = "primary"
-  
+
   failover_routing_policy {
     type = "PRIMARY"
   }
@@ -62,8 +60,8 @@ resource "aws_route53_record" "primary" {
   health_check_id = var.enable_disaster_recovery ? aws_route53_health_check.primary[0].id : null
 
   alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
+    name                   = data.aws_lb.main.dns_name
+    zone_id                = data.aws_lb.main.zone_id
     evaluate_target_health = true
   }
 }
@@ -77,15 +75,15 @@ resource "aws_route53_record" "secondary" {
   type    = "A"
 
   set_identifier = "secondary"
-  
+
   failover_routing_policy {
     type = "SECONDARY"
   }
 
   # Note: This assumes you have a load balancer in the secondary region
   alias {
-    name                   = "secondary-${aws_lb.main.dns_name}"  # Placeholder
-    zone_id                = aws_lb.main.zone_id                 # Would need actual secondary LB zone
+    name                   = "secondary-${data.aws_lb.main.dns_name}" # Placeholder
+    zone_id                = data.aws_lb.main.zone_id                 # Would need actual secondary LB zone
     evaluate_target_health = true
   }
 }
@@ -130,7 +128,7 @@ resource "aws_cloudwatch_metric_alarm" "health_check_primary" {
 # SNS topic for health check alerts
 resource "aws_sns_topic" "alerts" {
   count = var.domain_name != "" && var.enable_disaster_recovery ? 1 : 0
-  
+
   name = "${local.name_prefix}-health-alerts"
 
   tags = merge(local.common_tags, {
@@ -141,7 +139,7 @@ resource "aws_sns_topic" "alerts" {
 # SNS topic policy
 resource "aws_sns_topic_policy" "alerts" {
   count = var.domain_name != "" && var.enable_disaster_recovery ? 1 : 0
-  
+
   arn = aws_sns_topic.alerts[0].arn
 
   policy = jsonencode({
@@ -161,23 +159,15 @@ resource "aws_sns_topic_policy" "alerts" {
 }
 
 # Example SNS subscription (email notification)
-# Note: You would need to confirm the subscription manually
 resource "aws_sns_topic_subscription" "email_alerts" {
   count = var.domain_name != "" && var.enable_disaster_recovery ? 1 : 0
-  
+
   topic_arn = aws_sns_topic.alerts[0].arn
   protocol  = "email"
-  endpoint  = "admin@${var.domain_name}"  # Change to actual email
+  endpoint  = "admin@${var.domain_name}" # Change to actual email
 }
 
-# Secondary region infrastructure (placeholder for complete DR setup)
-# Note: For a complete disaster recovery setup, you would need to:
-# 1. Create another provider for the secondary region
-# 2. Duplicate the ECS, ALB, and related infrastructure
-# 3. Set up cross-region ECR replication
-# 4. Configure database replication if using RDS
-
-# Example secondary region ECS cluster (placeholder)
+# Secondary region ECS cluster (placeholder for DR)
 resource "aws_ecs_cluster" "secondary" {
   count = var.enable_disaster_recovery ? 1 : 0
 

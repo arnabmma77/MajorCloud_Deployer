@@ -51,15 +51,16 @@ resource "aws_acm_certificate_validation" "main" {
 resource "aws_lb_listener" "https" {
   count = var.domain_name != "" ? 1 : 0
 
-  load_balancer_arn = aws_lb.main.arn
-  port              = "443"
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS-1-2-2017-01"
-  certificate_arn   = aws_acm_certificate_validation.main[0].certificate_arn
+  load_balancer_arn = data.aws_lb.main.arn
+
+  port            = "443"
+  protocol        = "HTTPS"
+  ssl_policy      = "ELBSecurityPolicy-TLS-1-2-2017-01"
+  certificate_arn = aws_acm_certificate_validation.main[0].certificate_arn
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
+    target_group_arn = data.aws_lb_target_group.app.arn
   }
 
   tags = merge(local.common_tags, {
@@ -139,9 +140,9 @@ resource "aws_cloudwatch_metric_alarm" "certificate_expiry" {
   evaluation_periods  = "1"
   metric_name         = "DaysToExpiry"
   namespace           = "AWS/CertificateManager"
-  period              = "86400"  # 1 day
+  period              = "86400" # 1 day
   statistic           = "Minimum"
-  threshold           = "30"     # Alert if less than 30 days to expiry
+  threshold           = "30" # Alert if less than 30 days to expiry
   alarm_description   = "Alert when SSL certificate has less than 30 days until expiry"
   treat_missing_data  = "notBreaching"
 

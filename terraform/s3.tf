@@ -64,6 +64,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "static_assets" {
     id     = "cleanup_incomplete_uploads"
     status = "Enabled"
 
+    filter {} # empty filter == applies to whole bucket
+
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }
@@ -72,6 +74,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "static_assets" {
   rule {
     id     = "transition_to_ia"
     status = "Enabled"
+
+    filter {} # apply to all objects; or use filter { prefix = "path/" } if you need a prefix
 
     transition {
       days          = 30
@@ -140,7 +144,7 @@ resource "aws_cloudfront_distribution" "static_assets" {
 
     forwarded_values {
       query_string = true
-      headers      = ["*"]
+      headers      = []
       cookies {
         forward = "all"
       }
@@ -170,7 +174,7 @@ resource "aws_cloudfront_distribution" "static_assets" {
 
 # S3 bucket for Terraform state (if not using existing one)
 resource "aws_s3_bucket" "terraform_state" {
-  bucket = "weather-app-terraform-state-bucket-${random_id.suffix.hex}"
+  bucket = "deployer-major-bucket-${random_id.suffix.hex}"
 
   tags = merge(local.common_tags, {
     Name        = "terraform-state-bucket"
@@ -211,23 +215,4 @@ resource "aws_s3_bucket_public_access_block" "terraform_state" {
   restrict_public_buckets = true
 }
 
-# DynamoDB table for Terraform state locking
-resource "aws_dynamodb_table" "terraform_state_lock" {
-  name           = "terraform-lock"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "LockID"
 
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-
-  tags = merge(local.common_tags, {
-    Name        = "terraform-state-lock"
-    Description = "DynamoDB table for Terraform state locking"
-  })
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}

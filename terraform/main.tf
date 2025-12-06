@@ -146,55 +146,48 @@ resource "aws_security_group" "ecs_tasks" {
   }
 }
 
-# Application Load Balancer
-resource "aws_lb" "main" {
-  name               = "${local.name_prefix}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets           = aws_subnet.public[*].id
-
-  enable_deletion_protection = false
-
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-alb"
-  })
+# Use existing Application Load Balancer (imported earlier)
+data "aws_lb" "main" {
+  # This must match the existing ALB name you already have
+  name = "weather-app-prod-alb"
 }
 
-# ALB Target Group
-resource "aws_lb_target_group" "app" {
-  name        = "${local.name_prefix}-tg"
-  port        = var.container_port
+# ALB Target Group (managed by Terraform, matches existing TG)
+/*resource "aws_lb_target_group" "app" {
+  name        = "weather-app-prod-tg"
+  port        = 8080
   protocol    = "HTTP"
   target_type = "ip"
   vpc_id      = aws_vpc.main.id
 
   health_check {
-    enabled             = true
-    healthy_threshold   = 2
-    interval            = 30
-    matcher             = "200"
     path                = "/health"
-    port                = "traffic-port"
     protocol            = "HTTP"
+    matcher             = "200"
+    interval            = 30
     timeout             = 5
+    healthy_threshold   = 2
     unhealthy_threshold = 2
   }
 
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-tg"
   })
+}*/
+
+data "aws_lb_target_group" "app" {
+  name = "weather-app-prod-tg"
 }
 
-# ALB Listener
+# ALB Listener on HTTP (forward to TG)
 resource "aws_lb_listener" "app" {
-  load_balancer_arn = aws_lb.main.arn
+  load_balancer_arn = data.aws_lb.main.arn
   port              = "80"
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
+    target_group_arn = data.aws_lb_target_group.app.arn
   }
 
   tags = merge(local.common_tags, {
@@ -202,7 +195,7 @@ resource "aws_lb_listener" "app" {
   })
 }
 
-# CloudWatch Log Group
+# CloudWatch Log Group for ECS
 resource "aws_cloudwatch_log_group" "app" {
   name              = "/ecs/${local.name_prefix}"
   retention_in_days = var.log_retention_in_days

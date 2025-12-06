@@ -25,20 +25,21 @@ output "ecs_service_name" {
 # Application Load Balancer DNS Name
 output "alb_dns_name" {
   description = "Application Load Balancer DNS name"
-  value       = aws_lb.main.dns_name
+  value       = data.aws_lb.main.dns_name
 }
 
 # Application Load Balancer Zone ID
 output "alb_zone_id" {
   description = "Application Load Balancer Zone ID"
-  value       = aws_lb.main.zone_id
+  value       = data.aws_lb.main.zone_id
 }
 
 # Application URL
 output "app_url" {
   description = "Application URL"
-  value       = "http://${aws_lb.main.dns_name}"
+  value       = "http://${data.aws_lb.main.dns_name}"
 }
+
 
 # S3 Bucket Name for Static Assets
 output "s3_bucket_name" {
@@ -100,11 +101,7 @@ output "terraform_state_bucket_name" {
   value       = aws_s3_bucket.terraform_state.bucket
 }
 
-# DynamoDB State Lock Table Name
-output "terraform_state_lock_table_name" {
-  description = "DynamoDB table name for Terraform state locking"
-  value       = aws_dynamodb_table.terraform_state_lock.name
-}
+
 
 # Route 53 Health Check IDs (if domain is configured)
 output "route53_health_check_primary_id" {
@@ -188,9 +185,12 @@ output "aws_account_id" {
 
 # Secrets Manager Secret ARN
 output "openweather_api_key_secret_arn" {
-  description = "Secrets Manager ARN for OpenWeather API key"
-  value       = var.openweather_api_key != "" ? aws_secretsmanager_secret.openweather_api_key[0].arn : null
+  value       = length(aws_secretsmanager_secret.openweather_api_key) > 0 ? aws_secretsmanager_secret.openweather_api_key[0].arn : null
+  description = "ARN of the OpenWeather API key secret (null when secret not created)"
+  sensitive   = true
 }
+
+
 
 # SSL Certificate ARNs
 output "acm_certificate_arn" {

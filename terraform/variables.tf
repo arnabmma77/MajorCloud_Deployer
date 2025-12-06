@@ -101,7 +101,7 @@ variable "openweather_api_key" {
 variable "enable_disaster_recovery" {
   description = "Enable disaster recovery setup with secondary region"
   type        = bool
-  default     = true
+  default     = false
 }
 
 # Health check grace period
@@ -142,8 +142,8 @@ variable "common_tags" {
   description = "Common tags to apply to all resources"
   type        = map(string)
   default = {
-    Project     = "weather-app"
-    ManagedBy   = "terraform"
-    Repository  = "https://github.com/yourusername/weather-app"
+    Project    = "weather-app"
+    ManagedBy  = "terraform"
+    Repository = "https://github.com/yourusername/weather-app"
   }
 }

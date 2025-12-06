@@ -149,13 +149,13 @@ resource "aws_ecs_task_definition" "app" {
   cpu                      = var.ecs_task_cpu
   memory                   = var.ecs_task_memory
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
-  task_role_arn           = aws_iam_role.ecs_task.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
 
   container_definitions = jsonencode([
     {
       name  = "weather-app"
       image = "${aws_ecr_repository.app.repository_url}:latest"
-      
+
       portMappings = [
         {
           containerPort = var.container_port
@@ -224,17 +224,16 @@ resource "aws_ecs_service" "app" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.app.arn
+    target_group_arn = data.aws_lb_target_group.app.arn
     container_name   = "weather-app"
     container_port   = var.container_port
   }
 
   health_check_grace_period_seconds = var.health_check_grace_period
 
-  deployment_configuration {
-    maximum_percent         = 200
-    minimum_healthy_percent = 100
-  }
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+
 
   depends_on = [
     aws_lb_listener.app,
