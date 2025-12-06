@@ -144,6 +144,6 @@ variable "common_tags" {
   default = {
     Project    = "weather-app"
     ManagedBy  = "terraform"
-    Repository = "https://github.com/yourusername/weather-app"
+    Repository = "https://github.com/arnabmma77/MajorCloud_Deployer"
   }
 }
